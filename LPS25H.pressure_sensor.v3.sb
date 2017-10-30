@@ -1,0 +1,186 @@
+#define P_OUT_read_start "\E8"
+#define REF_P_read_start "\C9"
+#define TEMP_OUT_read_start "\EB"
+#define RES_CONF_read "\90"
+#define WHO_AM_I_read "\8F"
+
+dim rc
+
+// CS pin for SPI
+rc = GpioSetFunc(13,2,1) //set as digital out (initialy HIGH)
+
+// DIM for SPI
+dim h
+dim SPI_r_data$
+dim WHO_AM_I_data$
+dim RES_CONF_data$
+dim pressure
+dim ref_pressure
+dim temperature
+
+dim temp_addr$
+
+FUNCTION STR2DEC(str$)
+	dim i
+	dim len
+	len = strlen(str$)
+	dim tempstr$, val, temp
+	val = 0
+	for i = len-1 downto 0
+		select i
+			case 7
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 268435456
+			case 6
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 16777216
+			case 5
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 1048576
+			case 4
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 65536
+			case 3
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 4096
+			case 2
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 256
+			case 1
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 16
+			case 0
+				tempstr$ = strsplitleft$(str$, 1)
+				temp = STRHEX2BIN(tempstr$,0)
+				val = val + temp * 1
+			case else
+				val = -999999999
+		endselect
+	next
+ENDFUNC val
+
+SUB readRegister(addr$, bytes)
+	GpioWrite(13, 0) // Set CS to LOW
+	SPI_r_data$ = ""
+	rc = SPIWrite(addr$)
+	rc = SPIRead(SPI_r_data$, bytes)
+	SPI_r_data$ = StrHexize$(SPI_r_data$)
+	GpioWrite(13, 1) // Set CS to HIGH
+	
+	// Reverse the order of bytes if more than 1 byte is read
+	if bytes > 1 then
+		dim i, temp$
+		temp$ = ""
+		for i = strlen(SPI_r_data$) downto 2 step 2
+			temp$ = temp$ + MID$(SPI_r_data$,i-2,2)
+		next
+		SPI_r_data$ = temp$
+	endif
+	
+ENDSUB
+
+SUB open_SPI(mode, clk, CFG)
+
+	// 0   Opened successfully
+	// 0x5200  Driver not found
+	// 0x5207 Driver already open
+	// 0x5225  Invalid Clock Frequency Requested
+	// 0x521D  Driver resource unavailable
+	// 0x522B  Invalid mode
+	
+	rc = SPIOpen(mode, clk, CFG, h) //SPIOPEN (nMode, nClockHz, nCfgFlags, nHande)
+	if rc == 0 then
+		print "SPI Open - success\n"
+	else
+		print "Error Opening SPI. Error COde: ";rc;"\n"
+	endif
+ENDSUB
+
+function button0press()
+
+	print "Reading Pressure\n"
+	open_SPI(0, 1000000, 0)
+	temp_addr$ = P_OUT_read_start
+	readRegister(temp_addr$, 3)
+	SPIclose(h)
+	
+	pressure = STR2DEC(SPI_r_data$)
+	pressure = pressure/4096
+	
+	print "\nPressure = ";pressure;" mbar\n"
+	
+
+endfunc 1
+
+function button1press()
+	print "Reading Reference Pressure\n"
+	open_SPI(0, 1000000, 0)
+	
+	temp_addr$ = REF_P_read_start
+	readRegister(temp_addr$,3)
+	SPIclose(h)
+	
+	ref_pressure = STR2DEC(SPI_r_data$)
+	ref_pressure = ref_pressure/4096
+	
+	print "\nReference Pressure = ";ref_pressure;" mbar\n"
+
+endfunc 1
+
+function button2press()
+	print "Reading Temperature\n"
+	open_SPI(0, 1000000, 0)
+	
+	temp_addr$ = TEMP_OUT_read_start
+	readRegister(temp_addr$, 2)
+	SPIclose(h)
+	
+	temperature = STR2DEC(SPI_r_data$)
+	temperature = 42 + (temperature/480)
+	print "\nTemperature data = ";temperature;" C\n"
+
+endfunc 1
+
+function button3press()
+	print "Reading Module Information\n"
+	open_SPI(0, 1000000, 0)
+	
+	temp_addr$ = WHO_AM_I_read
+	readRegister(temp_addr$, 1)
+	WHO_AM_I_data$ = SPI_r_data$
+	
+	temp_addr$ = RES_CONF_read
+	readRegister(temp_addr$, 1)
+	RES_CONF_data$ = SPI_r_data$
+	
+	print "\nDevice ID = ";WHO_AM_I_data$;"\n"
+	print "Resolution config = ";RES_CONF_data$;"\n"
+	SPIclose(h)
+endfunc 1
+
+rc = gpiosetfunc(9,1,1)
+rc = gpiosetfunc(25,1,1)
+rc = gpiosetfunc(17,1,1)
+rc = gpiosetfunc(18,1,1)
+
+rc = gpiobindevent(0,9,1)
+rc = gpiobindevent(1,25,1)
+rc = gpiobindevent(2,17,1)
+rc = gpiobindevent(3,18,1)
+
+onevent evgpiochan0 call button0press
+onevent evgpiochan1 call button1press
+onevent evgpiochan2 call button2press
+onevent evgpiochan3 call button3press
+
+print "Ready to begin \n"
+print "Please press one of the 4 buttons \n\n"
+
+waitevent 
